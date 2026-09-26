@@ -447,6 +447,7 @@ Changelog
 - Fix the ``evaluation`` agent skill's LiveCodeBench recipe scoring correct solutions that use binary standard I/O (``sys.stdin.buffer`` / ``sys.stdout.buffer``) as failures: the recipe now pins a fixed LiveCodeBench judge in the NeMo-Skills container. LiveCodeBench scores change as a result, so re-run earlier baselines before comparing.
 - Fix GPTQ with Megatron data parallelism: each data-parallel replica of a module now builds its Hessian from the whole calibration set instead of only its own shard, so all replicas reach the same quantized weights.
 - Fix ``examples/llm_sparsity/weight_sparsity/finetune.py`` saving a sharded state dict under FSDP2, the default FSDP version in Transformers 5, which made ``export_hf_ckpt.py`` fail to restore it. Re-run finetuning to produce a loadable ``finetuned_modelopt_state.pth``.
+- Fix ONNX AutoCast reference inference retaining every calibration sample's activations at once. The reference run marks every intermediate tensor as a graph output, so holding one full-graph activation dump per sample made peak memory scale with the number of samples in ``calibration_data`` and could exhaust host memory well below the 512 samples ``CalibrationDataProvider`` documents. Samples are now streamed and folded into the running per-tensor statistics as they arrive, so peak memory is independent of the sample count. The aggregated statistics are unchanged.
 
 0.47.0 (2026-09-23)
 ^^^^^^^^^^^^^^^^^^^
