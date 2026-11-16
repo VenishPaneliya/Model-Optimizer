@@ -339,9 +339,17 @@ class ReferenceRunner:
                         # first batch's raw arrays are only safe to return while it is
                         # the only batch.
                         first_batch = None
-                    # Fold every batch, including the first, through the same sentinel
-                    # comparison so a NaN batch can never poison the running statistic.
-                    self._fold_tensor_stats(stats, batch_data)
+                    try:
+                        # Fold every batch, including the first, through the same sentinel
+                        # comparison so a NaN batch can never poison the running statistic.
+                        self._fold_tensor_stats(stats, batch_data)
+                    except TypeError:
+                        if num_batches > 1:
+                            raise
+                        # A single batch of non-numeric data (e.g. a valid string input
+                        # feeding a Cast) is returned unchanged below without ever
+                        # needing numeric reduction; defer the error in case a second
+                        # batch arrives and genuinely requires it.
             finally:
                 # Capture the output before restoring stdout
                 captured_output = string_buffer.getvalue()

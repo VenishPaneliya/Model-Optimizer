@@ -217,6 +217,7 @@ Changelog
 - Fix BF16-to-FP8 ONNX export with ``ml_dtypes`` 0.7.0 producing NaN FP8 weights for very small convolution weights.
 - Fix AutoCast turning FP64 initializers and ``Constant`` values that exceed the FP32 range into infinities. They are now clamped to the largest FP32 value and the affected tensor is named in a warning.
 - Fix AutoCast flipping the sign of an initializer value too small for the target precision; such values now keep their sign.
+- Fix ONNX AutoCast retaining one full-graph activation dump per calibration sample during inference: samples are now folded into the running per-tensor statistics as they arrive, so this retention no longer scales with the number of samples in ``calibration_data``. Loading the input data itself (a JSON input list, or a single NPZ holding multiple samples) still materializes every sample's inputs.
 
 *Speculative Decoding*
 
@@ -231,7 +232,6 @@ Changelog
 - Fix streaming speculative-decoding training capturing another request's hidden states when the vLLM serve ran requests concurrently, and failing on vLLM 0.29 and later. Retrain drafters trained in streaming mode against a serve that ran requests concurrently.
 - Fix DFlash-family drafters (DFlash, DFlash2, DSpark, Domino, LiLiCorr) trained from scratch with ``examples/speculative_decoding/main.py`` having their RoPE frequencies rounded to BF16, so they trained under different rotary phases than vLLM serves them with.
 - Fix DFlash2's candidate-selector loss weighing every block position equally and dividing by its own count of positions, unlike the backbone loss and the SGLang/SpecForge DFlash2 reference. Logged DFlash2 losses change.
-- Fix ONNX AutoCast exhausting host memory on large calibration sets: statistics are now aggregated as each sample runs, so peak memory no longer grows with the number of samples in ``calibration_data``.
 
 *Megatron Framework (M-LM / M-Bridge)*
 
@@ -448,7 +448,6 @@ Changelog
 - Fix the ``evaluation`` agent skill's LiveCodeBench recipe scoring correct solutions that use binary standard I/O (``sys.stdin.buffer`` / ``sys.stdout.buffer``) as failures: the recipe now pins a fixed LiveCodeBench judge in the NeMo-Skills container. LiveCodeBench scores change as a result, so re-run earlier baselines before comparing.
 - Fix GPTQ with Megatron data parallelism: each data-parallel replica of a module now builds its Hessian from the whole calibration set instead of only its own shard, so all replicas reach the same quantized weights.
 - Fix ``examples/llm_sparsity/weight_sparsity/finetune.py`` saving a sharded state dict under FSDP2, the default FSDP version in Transformers 5, which made ``export_hf_ckpt.py`` fail to restore it. Re-run finetuning to produce a loadable ``finetuned_modelopt_state.pth``.
-- Fix ONNX AutoCast exhausting host memory on large calibration sets: statistics are now aggregated as each sample runs, so peak memory no longer grows with the number of samples in ``calibration_data``.
 
 0.47.0 (2026-09-23)
 ^^^^^^^^^^^^^^^^^^^
