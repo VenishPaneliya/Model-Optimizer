@@ -342,6 +342,8 @@ class ReferenceRunner:
                     try:
                         # Fold every batch, including the first, through the same sentinel
                         # comparison so a NaN batch can never poison the running statistic.
+                        # stats is always set above on the first iteration before this runs.
+                        assert stats is not None
                         self._fold_tensor_stats(stats, batch_data)
                     except TypeError:
                         if num_batches > 1:
