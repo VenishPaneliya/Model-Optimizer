@@ -25,6 +25,19 @@ import numpy as np
 import torch
 
 
+def _get_rope_parameters(config: Any) -> dict[str, Any]:
+    """Return the config's RoPE settings as one flat dict that includes ``rope_theta``."""
+    # transformers 5 folds config.json's rope_theta and rope_scaling into rope_parameters and drops
+    # the rope_theta attribute; transformers 4 keeps them as separate attributes.
+    params = getattr(config, "rope_parameters", None)
+    if not params:
+        params = {**(getattr(config, "rope_scaling", None) or {})}
+        params["rope_theta"] = getattr(config, "rope_theta", 10000.0)
+    if "rope_theta" not in params:
+        raise ValueError(f"Per-layer-type RoPE parameters are not supported: {sorted(params)}")
+    return params
+
+
 def get_rope_caches(
     model_id: str,
     max_seq_len: int,
@@ -61,20 +74,33 @@ def get_rope_caches(
 
     config = AutoConfig.from_pretrained(model_id, trust_remote_code=trust_remote_code)
 
-    theta = getattr(config, "rope_theta", 10000.0)
+    rope = _get_rope_parameters(config)
+    rope_type = rope.get("rope_type", rope.get("type", "default"))
     head_dim = config.hidden_size // config.num_attention_heads
     partial_factor = getattr(config, "partial_rotary_factor", 1.0)
     dim = int(head_dim * partial_factor)
 
-    # Match builder: int64 -> float
-    inv_freq = 1.0 / (theta ** (torch.arange(0, dim, 2, dtype=torch.int64).float() / dim))
+    attention_scaling = 1.0
+    if rope_type == "default":
+        # Match builder: int64 -> float
+        inv_freq = 1.0 / (
+            rope["rope_theta"] ** (torch.arange(0, dim, 2, dtype=torch.int64).float() / dim)
+        )
+    else:
+        # Only scaled RoPE needs this; transformers < 4.43 lacks it.
+        from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS
+
+        if rope_type not in ROPE_INIT_FUNCTIONS:
+            raise ValueError(f"Unsupported rope_type {rope_type!r}")
+        # Scaled RoPE (llama3, yarn, ...): the function the exported rotary embedding was traced from.
+        inv_freq, attention_scaling = ROPE_INIT_FUNCTIONS[rope_type](config, "cpu")
     t = torch.arange(max_seq_len, dtype=torch.int64).float()
 
     freqs = torch.outer(t, inv_freq)
     emb = torch.cat((freqs, freqs), dim=-1)
 
-    cos_cache = emb.cos()
-    sin_cache = emb.sin()
+    cos_cache = emb.cos() * attention_scaling
+    sin_cache = emb.sin() * attention_scaling
 
     # Cast to target dtype
     dtype_map = {
