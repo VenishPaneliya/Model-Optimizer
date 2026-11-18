@@ -20,8 +20,11 @@ import json
 import numpy as np
 import pytest
 import torch
+from packaging.version import Version
 
-pytest.importorskip("transformers", reason="transformers required for RoPE cache tests")
+transformers = pytest.importorskip(
+    "transformers", reason="transformers required for RoPE cache tests"
+)
 
 from transformers import AutoConfig
 from transformers.models.llama.modeling_llama import LlamaRotaryEmbedding
@@ -37,12 +40,19 @@ LLAMA3_SCALING = {
     "high_freq_factor": 4.0,
     "original_max_position_embeddings": 64,
 }
+DYNAMIC_SCALING = {"rope_type": "dynamic", "factor": 2.0}
+LONGROPE_SCALING = {
+    "rope_type": "longrope",
+    "short_factor": [1.0] * (HEAD_DIM // 2),
+    "long_factor": [2.0] * (HEAD_DIM // 2),
+    "original_max_position_embeddings": 256,
+}
+TRANSFORMERS_4 = Version(transformers.__version__) < Version("5")
 
 
-@pytest.mark.parametrize("rope_scaling", [None, LLAMA3_SCALING], ids=["default", "llama3"])
-def test_rope_caches_match_hf_rotary_embedding(tmp_path, rope_scaling):
-    """Caches equal HF's rotary embedding for a checkpoint-style config.json (top-level rope_theta)."""
-    config = {
+def _llama_config(rope_scaling, max_position_embeddings=4096):
+    """A checkpoint-style config, with rope_theta at the top level."""
+    return {
         "model_type": "llama",
         "hidden_size": 4 * HEAD_DIM,
         "num_attention_heads": 4,
@@ -50,17 +60,63 @@ def test_rope_caches_match_hf_rotary_embedding(tmp_path, rope_scaling):
         "num_hidden_layers": 1,
         "intermediate_size": 512,
         "vocab_size": 64,
-        "max_position_embeddings": 4096,
+        "max_position_embeddings": max_position_embeddings,
         "rope_theta": 500000.0,
         "rope_scaling": rope_scaling,
     }
-    (tmp_path / "config.json").write_text(json.dumps(config))
 
-    cos, sin, _ = get_rope_caches(str(tmp_path), MAX_SEQ_LEN, io_dtype="float32")
 
-    rotary = LlamaRotaryEmbedding(config=AutoConfig.from_pretrained(str(tmp_path)))
+def _write_config(path, config):
+    (path / "config.json").write_text(json.dumps(config))
+    return str(path)
+
+
+@pytest.mark.parametrize(
+    "rope_scaling",
+    [None, LLAMA3_SCALING, DYNAMIC_SCALING],
+    ids=["default", "llama3", "dynamic"],
+)
+def test_rope_caches_match_hf_rotary_embedding(tmp_path, rope_scaling):
+    """Caches equal HF's rotary embedding (dynamic: within its original context)."""
+    model_dir = _write_config(tmp_path, _llama_config(rope_scaling))
+
+    cos, sin, _ = get_rope_caches(model_dir, MAX_SEQ_LEN, io_dtype="float32")
+
+    rotary = LlamaRotaryEmbedding(config=AutoConfig.from_pretrained(model_dir))
     ref_cos, ref_sin = rotary(
         torch.zeros(1, MAX_SEQ_LEN, HEAD_DIM), torch.arange(MAX_SEQ_LEN)[None]
     )
     np.testing.assert_allclose(cos, ref_cos[0, :, : HEAD_DIM // 2].numpy(), atol=1e-5)
     np.testing.assert_allclose(sin, ref_sin[0, :, : HEAD_DIM // 2].numpy(), atol=1e-5)
+
+
+@pytest.mark.parametrize(
+    ("config", "match"),
+    [
+        pytest.param(
+            _llama_config(DYNAMIC_SCALING, max_position_embeddings=256),
+            "max_seq_len",
+            id="dynamic-past-limit",
+        ),
+        pytest.param(_llama_config(LONGROPE_SCALING), "max_seq_len", id="longrope-past-limit"),
+        pytest.param(
+            _llama_config({"rope_type": "made_up", "factor": 2.0}),
+            "rope_type",
+            id="unknown-rope-type",
+        ),
+        pytest.param(
+            {"model_type": "gemma3_text"},
+            "Per-layer-type",
+            id="per-layer-type",
+            marks=pytest.mark.skipif(
+                TRANSFORMERS_4, reason="per-layer RoPE parameters are a transformers 5 format"
+            ),
+        ),
+    ],
+)
+def test_rope_caches_refuse_rope_one_static_cache_cannot_represent(tmp_path, config, match):
+    """Such RoPE configs raise instead of getting wrong caches."""
+    model_dir = _write_config(tmp_path, config)
+
+    with pytest.raises(ValueError, match=match):
+        get_rope_caches(model_dir, MAX_SEQ_LEN, io_dtype="float32")

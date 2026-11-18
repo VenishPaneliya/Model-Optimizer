@@ -38,6 +38,19 @@ def _get_rope_parameters(config: Any) -> dict[str, Any]:
     return params
 
 
+def _rope_length_limit(config: Any, rope: dict[str, Any], rope_type: str) -> int | None:
+    """Sequence length past which transformers switches this RoPE type to other frequencies."""
+    if "dynamic" in rope_type:
+        return config.max_position_embeddings
+    if rope_type == "longrope":
+        return (
+            getattr(config, "original_max_position_embeddings", None)
+            or rope.get("original_max_position_embeddings")
+            or config.max_position_embeddings
+        )
+    return None
+
+
 def get_rope_caches(
     model_id: str,
     max_seq_len: int,
@@ -92,6 +105,12 @@ def get_rope_caches(
 
         if rope_type not in ROPE_INIT_FUNCTIONS:
             raise ValueError(f"Unsupported rope_type {rope_type!r}")
+        limit = _rope_length_limit(config, rope, rope_type)
+        if limit is not None and max_seq_len > limit:
+            raise ValueError(
+                f"rope_type {rope_type!r} changes its frequencies past {limit} positions, which one "
+                f"static cache cannot follow; use max_seq_len <= {limit}"
+            )
         # Scaled RoPE (llama3, yarn, ...): the function the exported rotary embedding was traced from.
         inv_freq, attention_scaling = ROPE_INIT_FUNCTIONS[rope_type](config, "cpu")
     t = torch.arange(max_seq_len, dtype=torch.int64).float()
