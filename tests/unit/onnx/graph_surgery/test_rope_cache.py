@@ -41,16 +41,17 @@ LLAMA3_SCALING = {
     "original_max_position_embeddings": 64,
 }
 DYNAMIC_SCALING = {"rope_type": "dynamic", "factor": 2.0}
+YARN_SCALING = {"rope_type": "yarn", "factor": 4.0, "original_max_position_embeddings": 1024}
+# Phi-3 and Phi-4-mini keep original_max_position_embeddings at the top level of config.json.
 LONGROPE_SCALING = {
     "rope_type": "longrope",
     "short_factor": [1.0] * (HEAD_DIM // 2),
     "long_factor": [2.0] * (HEAD_DIM // 2),
-    "original_max_position_embeddings": 256,
 }
 TRANSFORMERS_4 = Version(transformers.__version__) < Version("5")
 
 
-def _llama_config(rope_scaling, max_position_embeddings=4096):
+def _llama_config(rope_scaling, max_position_embeddings=4096, **top_level):
     """A checkpoint-style config, with rope_theta at the top level."""
     return {
         "model_type": "llama",
@@ -63,6 +64,7 @@ def _llama_config(rope_scaling, max_position_embeddings=4096):
         "max_position_embeddings": max_position_embeddings,
         "rope_theta": 500000.0,
         "rope_scaling": rope_scaling,
+        **top_level,
     }
 
 
@@ -72,13 +74,21 @@ def _write_config(path, config):
 
 
 @pytest.mark.parametrize(
-    "rope_scaling",
-    [None, LLAMA3_SCALING, DYNAMIC_SCALING],
-    ids=["default", "llama3", "dynamic"],
+    "config",
+    [
+        pytest.param(_llama_config(None), id="default"),
+        pytest.param(_llama_config(LLAMA3_SCALING), id="llama3"),
+        pytest.param(_llama_config(DYNAMIC_SCALING), id="dynamic"),
+        pytest.param(_llama_config(YARN_SCALING), id="yarn"),
+        pytest.param(
+            _llama_config(LONGROPE_SCALING, original_max_position_embeddings=MAX_SEQ_LEN),
+            id="longrope-at-limit",
+        ),
+    ],
 )
-def test_rope_caches_match_hf_rotary_embedding(tmp_path, rope_scaling):
-    """Caches equal HF's rotary embedding (dynamic: within its original context)."""
-    model_dir = _write_config(tmp_path, _llama_config(rope_scaling))
+def test_rope_caches_match_hf_rotary_embedding(tmp_path, config):
+    """Caches equal HF's rotary embedding, attention scaling included (dynamic, longrope: up to their limit)."""
+    model_dir = _write_config(tmp_path, config)
 
     cos, sin, _ = get_rope_caches(model_dir, MAX_SEQ_LEN, io_dtype="float32")
 
@@ -98,7 +108,11 @@ def test_rope_caches_match_hf_rotary_embedding(tmp_path, rope_scaling):
             "max_seq_len",
             id="dynamic-past-limit",
         ),
-        pytest.param(_llama_config(LONGROPE_SCALING), "max_seq_len", id="longrope-past-limit"),
+        pytest.param(
+            _llama_config(LONGROPE_SCALING, original_max_position_embeddings=256),
+            "max_seq_len",
+            id="longrope-past-limit",
+        ),
         pytest.param(
             _llama_config({"rope_type": "made_up", "factor": 2.0}),
             "rope_type",

@@ -223,7 +223,7 @@ Changelog
 - Fix BF16-to-FP8 ONNX export with ``ml_dtypes`` 0.7.0 producing NaN FP8 weights for very small convolution weights.
 - Fix AutoCast turning FP64 initializers and ``Constant`` values that exceed the FP32 range into infinities. They are now clamped to the largest FP32 value and the affected tensor is named in a warning.
 - Fix AutoCast flipping the sign of an initializer value too small for the target precision; such values now keep their sign.
-- Fix the ``replace-gqa`` graph surgery building wrong RoPE caches with transformers 5, where it used ``rope_theta`` 10000, and for models with scaled RoPE such as Llama 3.x, which made the GQA model's outputs drift from the original model. Re-run the surgery on affected models.
+- Fix the ``replace-gqa`` graph surgery building wrong RoPE caches, which made the GQA model's outputs drift from the original model: with transformers 5 it used ``rope_theta`` 10000 for every model, and it ignored scaled RoPE such as ``llama3`` (Llama 3.x), ``yarn`` and ``longrope``. Re-run the surgery on models it processed with transformers 5 or with scaled RoPE. RoPE that one static cache cannot represent now raises an error: per-layer-type RoPE, an unknown ``rope_type``, and ``dynamic`` or ``longrope`` RoPE past the length where its frequencies change.
 
 *Speculative Decoding*
 
