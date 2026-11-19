@@ -143,6 +143,7 @@ def _score_batch(
             attention_mask=attention_mask,
             position_ids=position_ids,
             use_cache=False,
+            return_dict=True,
             **kwargs,
         )
         # Left padding aligns the final prediction in every row. Clone to release prompt logits.

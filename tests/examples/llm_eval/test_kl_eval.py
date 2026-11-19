@@ -28,7 +28,13 @@ from datasets import Dataset
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 from tokenizers.pre_tokenizers import Whitespace
-from transformers import GPT2Config, GPT2LMHeadModel, PreTrainedTokenizerFast
+from transformers import (
+    BloomConfig,
+    BloomForCausalLM,
+    GPT2Config,
+    GPT2LMHeadModel,
+    PreTrainedTokenizerFast,
+)
 
 
 @pytest.fixture
@@ -87,7 +93,22 @@ def test_identical_logits_have_zero_kl(kl_eval, dtype):
     assert metrics == pytest.approx({"full_vocab_kl": 0, "conditional_topk_kl": 0}, abs=1e-7)
 
 
-def _tiny_model():
+def _tiny_model(tuple_default=False):
+    if tuple_default:
+        return BloomForCausalLM(
+            BloomConfig(
+                vocab_size=16,
+                hidden_size=8,
+                n_layer=1,
+                n_head=1,
+                bos_token_id=1,
+                eos_token_id=0,
+                pad_token_id=0,
+                return_dict=False,
+                hidden_dropout=0,
+                attention_dropout=0,
+            )
+        ).eval()
     return GPT2LMHeadModel(
         GPT2Config(
             vocab_size=16,
@@ -105,10 +126,11 @@ def _tiny_model():
     ).eval()
 
 
+@pytest.mark.parametrize("tuple_default", [False, True])
 @pytest.mark.parametrize(("eos_token_id", "end"), [(None, 7), (0, 6), ([0, 8], 5)])
-def test_scores_all_and_only_continuation_predictions(kl_eval, eos_token_id, end):
+def test_scores_all_and_only_continuation_predictions(kl_eval, eos_token_id, end, tuple_default):
     torch.manual_seed(0)
-    reference = _tiny_model()
+    reference = _tiny_model(tuple_default)
     reference.generation_config.eos_token_id = eos_token_id
     quantized = copy.deepcopy(reference)
     with torch.no_grad():
@@ -116,8 +138,18 @@ def test_scores_all_and_only_continuation_predictions(kl_eval, eos_token_id, end
     # EOS in the prompt is ignored; scalar/list EOS settings stop at different positions.
     sequence = torch.tensor([[0, 5, 6, 7, 8, 0, 0]])
     with torch.inference_mode():
-        p = reference(sequence[:, :-1], use_cache=False).logits[0, 2 : end - 1].float()
-        q = quantized(sequence[:, :-1], use_cache=False).logits[0, 2 : end - 1].float()
+        if tuple_default:
+            assert isinstance(reference(sequence[:, :-1], use_cache=False), tuple)
+        p = (
+            reference(sequence[:, :-1], use_cache=False, return_dict=True)
+            .logits[0, 2 : end - 1]
+            .float()
+        )
+        q = (
+            quantized(sequence[:, :-1], use_cache=False, return_dict=True)
+            .logits[0, 2 : end - 1]
+            .float()
+        )
         per_position = (p.softmax(-1) * (p.log_softmax(-1) - q.log_softmax(-1))).sum(-1)
         expected = per_position.mean().item()
         ids = p.topk(4, dim=-1).indices
