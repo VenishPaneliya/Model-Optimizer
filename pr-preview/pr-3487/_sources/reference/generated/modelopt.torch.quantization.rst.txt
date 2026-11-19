@@ -85,6 +85,10 @@ quantization
 
 
 
+   modelopt.torch.quantization.repair_formats
+
+
+
    modelopt.torch.quantization.tensor_quant
 
 

@@ -2,7 +2,7 @@
 <html lang="en" data-accent-color="green" data-content_root="../">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Changelog - Model Optimizer 0.0.1.dev1+gd597d9500</title><link rel="index" title="Index" href="../genindex.html" /><link rel="search" title="Search" href="../search.html" /><link rel="next" title="modelopt API" href="1_modelopt_api.html" /><link rel="prev" title="All GitHub Examples" href="../examples/0_all_examples.html" /><script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Changelog - Model Optimizer 0.0.1.dev1+g6da3a5d56</title><link rel="index" title="Index" href="../genindex.html" /><link rel="search" title="Search" href="../search.html" /><link rel="next" title="modelopt API" href="1_modelopt_api.html" /><link rel="prev" title="All GitHub Examples" href="../examples/0_all_examples.html" /><script>
     function setColorMode(t){let e=document.documentElement;e.setAttribute("data-color-mode",t);let a=window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches,s=t;"auto"===t&&(s=a?"dark":"light"),"light"===s?(e.classList.remove("dark"),e.classList.add("light")):(e.classList.remove("light"),e.classList.add("dark"))}
     setColorMode(localStorage._theme||"auto");
   </script><link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=e1a1ceaf" />
@@ -325,6 +325,7 @@ data-aria-dark="Switch to auto color mode">
 <li class="toctree-l4"><a class="reference internal" href="generated/modelopt.torch.quantization.nn.html">nn</a></li>
 <li class="toctree-l4"><a class="reference internal" href="generated/modelopt.torch.quantization.plugins.html">plugins</a></li>
 <li class="toctree-l4"><a class="reference internal" href="generated/modelopt.torch.quantization.qtensor.html">qtensor</a></li>
+<li class="toctree-l4"><a class="reference internal" href="generated/modelopt.torch.quantization.repair_formats.html">repair_formats</a></li>
 <li class="toctree-l4"><a class="reference internal" href="generated/modelopt.torch.quantization.tensor_quant.html">tensor_quant</a></li>
 <li class="toctree-l4"><a class="reference internal" href="generated/modelopt.torch.quantization.utils.html">utils</a></li>
 </ul>
@@ -473,11 +474,15 @@ data-aria-dark="Switch to auto color mode">
 </ul>
 <p><em>Quantization - Algorithms</em></p>
 <ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">max</span></code>, <code class="docutils literal notranslate"><span class="pre">imatrix</span></code> and <code class="docutils literal notranslate"><span class="pre">local_hessian</span></code> calibration of <code class="docutils literal notranslate"><span class="pre">iq1_s</span></code>, <code class="docutils literal notranslate"><span class="pre">iq1_m</span></code>, <code class="docutils literal notranslate"><span class="pre">iq2_xxs</span></code>, <code class="docutils literal notranslate"><span class="pre">iq2_xs</span></code> and <code class="docutils literal notranslate"><span class="pre">iq2_s</span></code> now derive each block’s super-block scale from the weights and match each block’s output energy (<code class="docutils literal notranslate"><span class="pre">local_hessian</span></code> under each block’s Hessian), in place of fixed per-format scale anchors, which lowered KL divergence in all our tests (by up to half at IQ1) and matches or beats llama.cpp’s own imatrix quantizer in most of them.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">max</span></code>, <code class="docutils literal notranslate"><span class="pre">imatrix</span></code> and <code class="docutils literal notranslate"><span class="pre">local_hessian</span></code> calibration of <code class="docutils literal notranslate"><span class="pre">iq1_s</span></code>, <code class="docutils literal notranslate"><span class="pre">iq1_m</span></code>, <code class="docutils literal notranslate"><span class="pre">iq2_xxs</span></code>, <code class="docutils literal notranslate"><span class="pre">iq2_xs</span></code> and <code class="docutils literal notranslate"><span class="pre">iq2_s</span></code> now derive each block’s super-block scale from the weights and match each block’s output energy (<code class="docutils literal notranslate"><span class="pre">local_hessian</span></code> under each block’s Hessian), in place of fixed per-format scale anchors, which lowered KL divergence in all our tests (by up to half at IQ1) and matches or beats llama.cpp’s own imatrix quantizer in most of them. <code class="docutils literal notranslate"><span class="pre">gptq</span></code> derives the scale too and gives each output row a gain of one under its Hessian: KL fell on dense MLPs (by up to 40% at IQ1) and ranged from 19% lower to 3% higher on routed MoE experts alone.</p></li>
 <li><p>Add <code class="docutils literal notranslate"><span class="pre">context_quant_level</span></code> to KL-divergence AutoQuantize (<code class="docutils literal notranslate"><span class="pre">method={&quot;method&quot;:</span> <span class="pre">&quot;kl_div&quot;,</span> <span class="pre">&quot;context_quant_level&quot;:</span> <span class="pre">&quot;lowest&quot;}</span></code>, or <code class="docutils literal notranslate"><span class="pre">method_options:</span> <span class="pre">{context_quant_level:</span> <span class="pre">lowest}</span></code> in a recipe): each candidate is scored with every other searched layer at its lowest-bit format (an int picks the format by its 0-based index from the lowest), so low-bit budgets go to the layers whose error compounds most once the whole model is quantized. <code class="docutils literal notranslate"><span class="pre">&quot;lowest&quot;</span></code> is a good default; a context nearer the target budget measured the same in our tests.</p></li>
+<li><p>GPTQ calibration is 25-35% faster in our MoE-expert and dense-MLP tests, with the GGML IQ formats and with NVFP4 under <code class="docutils literal notranslate"><span class="pre">fused:</span> <span class="pre">true</span></code>. Results change only at round-off.</p></li>
 </ul>
 <p><em>Quantization - QAT / QAD</em></p>
 <p><em>Quantization - Export &amp; Deployment</em></p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">examples/hf_ptq/convert_ggml_to_int8.py</span></code> now also converts GGML exports that hold other formats (FP8, NVFP4, KV cache quantization): their GGML layers become ModelOpt <code class="docutils literal notranslate"><span class="pre">INT8_PB_WO</span></code> layers beside the rest of the export, which vLLM newer than 0.34.0 serves. Exports with only GGML layers still become compressed-tensors, and fused MoE experts now convert in both.</p></li>
+</ul>
 <p><em>Quantization - Recipes</em></p>
 <ul class="simple">
 <li><p>Add a sub-4-bit AutoQuantize recipe for Qwen3.6-35B-A3B at 2.75 bits, which searches the routed experts over GGML IQ2 formats with GPTQ and imatrix, weight-only NVFP4 and FP8, and BF16. Select it under <code class="docutils literal notranslate"><span class="pre">models/Qwen/Qwen3.6-35B-A3B/auto_quantize/</span></code>.</p></li>
@@ -486,19 +491,29 @@ data-aria-dark="Switch to auto color mode">
 <p><em>Speculative Decoding</em></p>
 <p><em>Megatron Framework (M-LM / M-Bridge)</em></p>
 <p><em>Misc</em></p>
+<ul class="simple">
+<li><p>Move agent skills to the repository-root <code class="docutils literal notranslate"><span class="pre">skills/</span></code> directory, with symlinks for agent discovery.</p></li>
+<li><p>Prefix agent skill names with <code class="docutils literal notranslate"><span class="pre">modelopt-</span></code>; existing names remain available as forwarding stubs.</p></li>
+</ul>
 <p><strong>Backward Breaking Changes</strong></p>
 <p><strong>Deprecations</strong></p>
 <p><strong>Bug Fixes</strong></p>
 <p><em>Quantization</em></p>
 <ul class="simple">
 <li><p>Applying a finalized AutoQuantize config to a large MoE with one module per expert no longer takes hours: <code class="docutils literal notranslate"><span class="pre">mtq.set_quantizer_by_cfg</span></code> now finds a quantizer that an entry names exactly without walking the model.</p></li>
+<li><p>NVFP4 weight export (Hugging Face checkpoints without TensorRT-LLM, and ONNX) now normalizes weights by the correctly rounded reciprocal of the block scale, as the Triton NVFP4 fake quant does, so a weight on an exact E2M1 rounding boundary no longer packs to a neighboring FP4 value; the Triton fake quant and FP8 scale sweep can also change at such boundaries. Re-export affected NVFP4 checkpoints.</p></li>
+<li><p>Unified HF export now writes model-hub tensor names for models with 3-D weights that do not stack experts. GGML exports of MoE models whose conversion mapping fuses experts, and models with a short convolution such as GLM-5.3-Flash, fell back to transformers’ in-memory names, which vLLM cannot load. Re-export affected checkpoints.</p></li>
 </ul>
 <p><em>ONNX</em></p>
 <ul class="simple">
 <li><p>ONNX AutoCast now keeps the variance of decomposed RMSNorm and unfused LayerNorm in FP32 for both FP16 and BF16 conversion, so FP16 models converted without calibration data no longer give wrong outputs on execution providers such as TensorRT-RTX. Reconvert affected models.</p></li>
+<li><p>Fix <code class="docutils literal notranslate"><span class="pre">--dq_only</span></code> ONNX export producing a model that ONNX Runtime cannot load when the weights are quantized to an unsigned type. Such exports now load and match the source model.</p></li>
 </ul>
 <p><em>Speculative Decoding</em></p>
 <p><em>Megatron Framework (M-LM / M-Bridge)</em></p>
+<ul class="simple">
+<li><p>Preserve model-specific hybrid stacks when selecting MoE expert layouts in Megatron-Bridge, and reject grouped GEMM when a custom factory returns sequential experts. Custom built stack <code class="docutils literal notranslate"><span class="pre">ModuleSpec</span></code> values are now rejected; assign a named factory function instead.</p></li>
+</ul>
 <p><em>Misc</em></p>
 </section>
 <section id="id1">
