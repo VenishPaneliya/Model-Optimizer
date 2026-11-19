@@ -21,6 +21,7 @@ Changelog
 *Quantization - Export & Deployment*
 
 - ``examples/hf_ptq/convert_ggml_to_int8.py`` now also converts GGML exports that hold other formats (FP8, NVFP4, KV cache quantization): their GGML layers become ModelOpt ``INT8_PB_WO`` layers beside the rest of the export, which vLLM newer than 0.34.0 serves. Exports with only GGML layers still become compressed-tensors, and fused MoE experts now convert in both.
+- Add ``permute_quantized_weight_export_state`` and ``squeeze_quantized_weight_export_state`` so exporters that unbind or transpose a stacked weight, such as an expert bank, keep its quantized export state aligned.
 
 *Quantization - Recipes*
 

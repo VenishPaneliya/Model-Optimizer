@@ -18,12 +18,13 @@
 import re
 from collections import OrderedDict
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import SimpleNamespace
 from typing import Any
 
 import torch
 import torch.nn as nn
+from torch.distributed.tensor import DTensor
 
 from modelopt import __version__
 from modelopt.torch.quantization.qtensor import (
@@ -70,9 +71,11 @@ __all__ = [
     "get_kv_cache_export_spec",
     "get_quantized_weight_export_spec",
     "merge_quantized_weight_export_states",
+    "permute_quantized_weight_export_state",
     "restore_quantized_weight_export_state",
     "select_quantized_weight_export_state",
     "split_quantized_weight_export_state",
+    "squeeze_quantized_weight_export_state",
 ]
 
 _NVFP4_EXPORT_FORMATS = {
@@ -162,12 +165,19 @@ def _same_storage(left: object, right: object) -> bool:
         return True
     if not isinstance(left, torch.Tensor) or not isinstance(right, torch.Tensor):
         return False
+    if isinstance(left, DTensor) or isinstance(right, DTensor):
+        if not isinstance(left, DTensor) or not isinstance(right, DTensor):
+            return False
+        if left.device_mesh != right.device_mesh:
+            return False
+        return _same_storage(left.to_local(), right.to_local())
     if left.device.type == "meta" or right.device.type == "meta":
         return False
     return (
         left.device == right.device
         and left.numel() == right.numel()
-        and left.untyped_storage().data_ptr() == right.untyped_storage().data_ptr()
+        # Distinct empty local shards all report data_ptr() == 0, so compare storage identity.
+        and torch._C._is_alias_of(left, right)
         and left.storage_offset() == right.storage_offset()
     )
 
@@ -781,6 +791,66 @@ def select_quantized_weight_export_state(
         state.input_quantizer_enabled,
         state.static_nvfp4,
         state.four_over_six,
+    )
+
+
+def permute_quantized_weight_export_state(
+    state: _QuantizedWeightExportState,
+    dims: Sequence[int],
+) -> _QuantizedWeightExportState:
+    """Transform opaque state alongside a logical weight's ``permute(dims)``."""
+    ndim = len(state.weight_shape)
+    dims = tuple(_normalize_weight_dim(dim, ndim) for dim in dims)
+    if len(dims) != ndim or len(set(dims)) != ndim:
+        raise ValueError("Weight permutation must contain every dimension exactly once")
+    return replace(
+        state,
+        weight_shape=tuple(state.weight_shape[dim] for dim in dims),
+        packing_permutation=tuple(dims.index(dim) for dim in state.packing_permutation),
+    )
+
+
+def squeeze_quantized_weight_export_state(
+    state: _QuantizedWeightExportState,
+    weight_dim: int,
+) -> _QuantizedWeightExportState:
+    """Remove one singleton logical weight dimension and its scale axes."""
+    ndim = len(state.weight_shape)
+    weight_dim = _normalize_weight_dim(weight_dim, ndim)
+    if ndim <= 1 or state.weight_shape[weight_dim] != 1:
+        raise ValueError("Only a singleton dimension of a non-scalar weight can be squeezed")
+    packed_dim = state.packing_permutation.index(weight_dim)
+    if packed_dim == ndim - 1 and state.block_size > 1:
+        raise ValueError("Cannot squeeze a quantization-block dimension")
+    tensors = []
+    for record in state.tensors:
+        value = record.value
+        removed = [index for index, axis in enumerate(record.axes) if axis == packed_dim]
+        if any(value.shape[index] != 1 for index in removed):
+            raise ValueError("Scale state does not have the selected singleton weight axis")
+        for index in reversed(removed):
+            value = value.squeeze(index)
+        tensors.append(
+            _ExportStateTensor(
+                record.name,
+                value,
+                tuple(axis - (axis > packed_dim) for axis in record.axes if axis != packed_dim),
+                tuple(
+                    block
+                    for axis, block in zip(record.axes, record.block_sizes, strict=True)
+                    if axis != packed_dim
+                ),
+            )
+        )
+    return replace(
+        state,
+        weight_shape=tuple(
+            size for axis, size in enumerate(state.weight_shape) if axis != weight_dim
+        ),
+        tensors=tuple(tensors),
+        packing_permutation=tuple(
+            dim - (dim > weight_dim) for dim in state.packing_permutation if dim != weight_dim
+        ),
     )
 
 

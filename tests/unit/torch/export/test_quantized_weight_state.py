@@ -18,6 +18,8 @@ import copy
 import pytest
 import torch
 import torch.nn as nn
+from torch.distributed.device_mesh import init_device_mesh
+from torch.distributed.tensor import DTensor, Shard
 
 import modelopt.torch.export.quantized_weight_export as weight_export
 import modelopt.torch.quantization as mtq
@@ -30,9 +32,11 @@ from modelopt.torch.export.quantized_weight_export import (
     get_kv_cache_export_spec,
     get_quantized_weight_export_spec,
     merge_quantized_weight_export_states,
+    permute_quantized_weight_export_state,
     restore_quantized_weight_export_state,
     select_quantized_weight_export_state,
     split_quantized_weight_export_state,
+    squeeze_quantized_weight_export_state,
 )
 from modelopt.torch.quantization.config import QuantizerAttributeConfig
 from modelopt.torch.quantization.nn import (
@@ -96,6 +100,26 @@ class _SquareTransposedExperts(nn.Module):
     def iter_weights_for_calibration(self):
         for name in ("gate_up_proj", "down_proj"):
             yield getattr(self, name).transpose(-1, -2), getattr(self, f"{name}_weight_quantizer")
+
+
+class _ShardedTransposedExperts(nn.Module):
+    def __init__(self, mesh, width):
+        super().__init__()
+        for name, shape, amax in (("w1", (1, 16, width), 2.0), ("w3", (1, width, 16), 8.0)):
+            weight = torch.arange(torch.Size(shape).numel(), dtype=torch.float32).reshape(shape)
+            local = weight if mesh.get_local_rank() == 0 else weight[:0].clone()
+            sharded = DTensor.from_local(
+                local, mesh, (Shard(0),), shape=weight.shape, stride=weight.stride()
+            )
+            setattr(self, name, nn.Parameter(sharded))
+            for kind, maximum in (("weight", amax), ("input", 1.0)):
+                quantizer = TensorQuantizer(QuantizerAttributeConfig(num_bits=(4, 3)))
+                quantizer.amax = maximum
+                setattr(self, f"{name}_{kind}_quantizer", quantizer)
+
+    def iter_weights_for_calibration(self):
+        for name in ("w1", "w3"):
+            yield getattr(self, name).mT, getattr(self, f"{name}_weight_quantizer")
 
 
 class _GroupedWeights(nn.Module):
@@ -756,6 +780,49 @@ def test_capture_uses_the_requested_weight_format_and_transposed_layout():
     with pytest.raises(ValueError, match="complete quantization blocks"):
         select_quantized_weight_export_state(down_state, 1, (0,))
     select_quantized_weight_export_state(down_state, 2, (0, 2))
+
+
+@pytest.mark.parametrize("weight_name", ["gate_up_proj", "down_proj"])
+def test_expert_unbind_and_transpose_preserve_packed_weights_and_scales(weight_name):
+    module = _SquareTransposedExperts()
+    weight = getattr(module, weight_name)
+    if weight_name == "gate_up_proj":
+        with torch.no_grad():
+            weight.div_(512)
+    state = capture_quantized_weight_export_state(module, weight_name)
+    full = export_quantized_weight_tensors(weight, state, torch.float32)
+    selected = select_quantized_weight_export_state(state, 0, [1])
+    selected = squeeze_quantized_weight_export_state(selected, 0)
+    selected = permute_quantized_weight_export_state(selected, (1, 0))
+    actual = export_quantized_weight_tensors(weight[1].mT, selected, torch.float32)
+    for name, expected in full.items():
+        if expected.ndim == weight.ndim:
+            expected = expected[1].mT
+        assert torch.isfinite(actual[name].float()).all()
+        assert torch.isfinite(expected.float()).all()
+        torch.testing.assert_close(actual[name].float(), expected.float(), rtol=0, atol=0)
+    assert state.weight_shape == tuple(weight.shape)
+    with pytest.raises(ValueError):
+        squeeze_quantized_weight_export_state(state, 0)
+    with pytest.raises(ValueError):
+        permute_quantized_weight_export_state(state, (0, 0, 2))
+
+
+def _empty_local_experts_keep_their_own_quantizers(rank, size):
+    mesh = init_device_mesh("cpu", (size,), mesh_dim_names=("shard",))
+    for width in (16, 32):
+        module = _ShardedTransposedExperts(mesh, width)
+        if rank > 0:
+            assert module.w1.to_local().numel() == module.w3.to_local().numel() == 0
+        weights = {name: getattr(module, name).full_tensor() for name in ("w1", "w3")}
+        for name, amax in (("w1", 2.0), ("w3", 8.0)):
+            state = capture_quantized_weight_export_state(module, name)
+            tensors = export_quantized_weight_tensors(weights[name], state, torch.float32)
+            torch.testing.assert_close(tensors["weight_scale"], torch.tensor(amax / 448.0))
+
+
+def test_empty_local_experts_keep_their_own_quantizers(cpu_dist_workers):
+    cpu_dist_workers.run(_empty_local_experts_keep_their_own_quantizers)
 
 
 def test_converted_hf_config_preserves_nvfp4_group_size():
