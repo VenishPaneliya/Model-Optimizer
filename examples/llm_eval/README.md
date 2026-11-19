@@ -15,10 +15,11 @@ python examples/llm_eval/kl_eval.py \
     --output kl_results.json
 ```
 
-Defaults: 300 prompts, batches of 8, greedy generation up to 2,048 tokens or EOS. Both models score the same continuations. Conditional KL uses the BF16 model's top 1,024 vocabulary tokens at each position, normalizing both distributions over those IDs. Scores are in nats, averaged within each prompt, then equally across prompts.
+Defaults: 300 prompts, batches of 8, greedy generation up to 1,024 tokens or EOS. Both models score the same continuations. Conditional KL uses the BF16 model's top 2,048 vocabulary tokens at 512 evenly spaced response positions, normalizing both distributions over those IDs. Short responses use every valid position. Scores are in nats, averaged within each prompt, then equally across prompts.
 
 - `--top_k K`: change the conditional vocabulary size.
-- `--full_vocab_kl`: also report full-vocabulary `KL(BF16 || fake-quant)`.
+- `--score_tokens N`: change the conditional position budget; `0` uses all valid positions.
+- `--full_vocab_kl`: also report full-vocabulary `KL(BF16 || fake-quant)` over all valid positions.
 - `--max_new_tokens N`, `--num_examples N`, `--eval_batch_size N`: adjust evaluation size.
 - `--detailed_results`: include per-prompt scores, token IDs, and run settings in JSON.
 
